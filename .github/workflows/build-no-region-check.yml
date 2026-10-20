@@ -71,12 +71,12 @@ jobs:
               # checkMachineIsChinaMainland() -> true
               (
                   'private static final boolean IS_CHINA_MAINLAND_MACHINE = checkMachineIsChinaMainland();',
-                  'private static final boolean IS_CHINA_MAINLAND_MACHINE = true;
+                  'private static final boolean IS_CHINA_MAINLAND_MACHINE = true;'
               ),
               # checkChinaMainlandNetwork() -> true
               (
                   'boolean result = checkChinaMainlandNetwork();',
-                  'boolean result = true; // patched: skip ipwho.is network check',
+                  'boolean result = true;',
               ),
           ]
 
