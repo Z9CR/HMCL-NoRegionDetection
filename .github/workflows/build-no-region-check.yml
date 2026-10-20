@@ -100,10 +100,11 @@ jobs:
           EOF
 
           # 验证两处补丁均已生效
-          grep -qF '// patched: remove region check' "$FILE"
-          grep -qF '// patched: skip ipwho.is network check' "$FILE"
+          grep -qF 'private static final boolean IS_CHINA_MAINLAND_MACHINE = true;' "$FILE"
+          grep -qF 'boolean result = true;' "$FILE"
           echo "Patches applied:"
-          grep -n "patched:" "$FILE"
+          grep -nF 'IS_CHINA_MAINLAND_MACHINE = true;' "$FILE"
+          grep -nF 'boolean result = true;' "$FILE"
 
       - name: Set up JDK 17
         if: steps.release_check.outputs.exists == 'false'
