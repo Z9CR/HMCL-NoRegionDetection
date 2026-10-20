@@ -61,29 +61,49 @@ jobs:
         run: |
           set -euo pipefail
           FILE="upstream/$PATCH_TARGET"
-          OLD='private static final boolean IS_CHINA_MAINLAND_MACHINE = checkMachineIsChinaMainland();'
-          NEW='private static final boolean IS_CHINA_MAINLAND_MACHINE = true; // patched: remove region check'
 
-          if ! grep -qF "$OLD" "$FILE"; then
-            echo "::error::Target line not found in $PATCH_TARGET — upstream changed, patch needs updating."
-            exit 1
-          fi
-
-          # 只替换这一处
-          python3 - "$FILE" "$OLD" "$NEW" <<'EOF'
+          python3 - "$FILE" <<'EOF'
           import sys
-          path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          path = sys.argv[1]
+
+          patches = [
+              # checkMachineIsChinaMainland() -> true
+              (
+                  'private static final boolean IS_CHINA_MAINLAND_MACHINE = checkMachineIsChinaMainland();',
+                  'private static final boolean IS_CHINA_MAINLAND_MACHINE = true;
+              ),
+              # checkChinaMainlandNetwork() -> true
+              (
+                  'boolean result = checkChinaMainlandNetwork();',
+                  'boolean result = true; // patched: skip ipwho.is network check',
+              ),
+          ]
+
           with open(path, 'r', encoding='utf-8') as f:
               content = f.read()
-          count = content.count(old)
-          assert count == 1, f"expected exactly 1 match, got {count}"
+
+          for i, (old, new) in enumerate(patches, 1):
+              count = content.count(old)
+              if count != 1:
+                  print(
+                      f"::error::Patch #{i}: expected exactly 1 match, got {count}. "
+                      f"Anchor not found or ambiguous — upstream changed, patch needs updating.",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+              content = content.replace(old, new)
+              print(f"Patch #{i}: applied ({old[:60]}...)")
+
           with open(path, 'w', encoding='utf-8') as f:
-              f.write(content.replace(old, new))
+              f.write(content)
           EOF
 
-          grep -qF "$NEW" "$FILE"
-          echo "Patch applied:"
-          grep -n "IS_CHINA_MAINLAND_MACHINE" "$FILE"
+          # 验证两处补丁均已生效
+          grep -qF '// patched: remove region check' "$FILE"
+          grep -qF '// patched: skip ipwho.is network check' "$FILE"
+          echo "Patches applied:"
+          grep -n "patched:" "$FILE"
 
       - name: Set up JDK 17
         if: steps.release_check.outputs.exists == 'false'
