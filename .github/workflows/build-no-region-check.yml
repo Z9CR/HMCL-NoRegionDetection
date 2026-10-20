@@ -1,0 +1,141 @@
+name: Build HMCL (no region check)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream HMCL git ref (branch, tag or commit SHA)'
+        required: false
+        default: 'main'
+  schedule:
+    # 每天检查一次上游更新
+    - cron: '0 18 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-no-region-check
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/HMCL-dev/HMCL.git
+  UPSTREAM_REF: ${{ inputs.ref || 'main' }}
+  PATCH_TARGET: HMCL/src/main/java/org/jackhuang/hmcl/util/RegionUtils.java
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Clone, patch and build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Clone upstream HMCL
+        id: clone
+        run: |
+          git clone --filter=blob:none "$UPSTREAM_REPO" upstream
+          cd upstream
+          git checkout "$UPSTREAM_REF"
+          UPSTREAM_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=${UPSTREAM_SHA::7}
+          echo "sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Cloned upstream @ $UPSTREAM_SHA"
+
+      - name: Check for existing release
+        id: release_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="unofficial-${{ steps.clone.outputs.short_sha }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists, skipping build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply patch (remove region check)
+        if: steps.release_check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          FILE="upstream/$PATCH_TARGET"
+          OLD='private static final boolean IS_CHINA_MAINLAND_MACHINE = checkMachineIsChinaMainland();'
+          NEW='private static final boolean IS_CHINA_MAINLAND_MACHINE = true; // patched: remove region check'
+
+          if ! grep -qF "$OLD" "$FILE"; then
+            echo "::error::Target line not found in $PATCH_TARGET — upstream changed, patch needs updating."
+            exit 1
+          fi
+
+          # 只替换这一处
+          python3 - "$FILE" "$OLD" "$NEW" <<'EOF'
+          import sys
+          path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+          with open(path, 'r', encoding='utf-8') as f:
+              content = f.read()
+          count = content.count(old)
+          assert count == 1, f"expected exactly 1 match, got {count}"
+          with open(path, 'w', encoding='utf-8') as f:
+              f.write(content.replace(old, new))
+          EOF
+
+          grep -qF "$NEW" "$FILE"
+          echo "Patch applied:"
+          grep -n "IS_CHINA_MAINLAND_MACHINE" "$FILE"
+
+      - name: Set up JDK 17
+        if: steps.release_check.outputs.exists == 'false'
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'liberica'
+          java-version: '17'
+          java-package: 'jdk+fx'
+
+      - name: Setup Gradle
+        if: steps.release_check.outputs.exists == 'false'
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-dependency-path: upstream/**/*.gradle*
+          cache-cleanup: never
+
+      - name: Build with Gradle
+        if: steps.release_check.outputs.exists == 'false'
+        working-directory: upstream
+        run: xvfb-run --auto-servernum ./gradlew build --no-daemon --parallel
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
+          VERSION_TYPE: release
+
+      - name: Upload artifacts
+        if: steps.release_check.outputs.exists == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: HMCL-unofficial-${{ steps.clone.outputs.short_sha }}
+          path: |
+            upstream/HMCL/build/libs/HMCL-*.jar
+            upstream/HMCL/build/libs/HMCL-*.exe
+            upstream/HMCL/build/libs/HMCL-*.sh
+            upstream/HMCL/build/libs/HMCL-*.deb
+            upstream/HMCL/build/libs/HMCL-*.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: steps.release_check.outputs.exists == 'false' && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="unofficial-${{ steps.clone.outputs.short_sha }}"
+          shopt -s nullglob
+          ASSETS=(upstream/HMCL/build/libs/HMCL-*.jar
+                  upstream/HMCL/build/libs/HMCL-*.exe
+                  upstream/HMCL/build/libs/HMCL-*.sh
+                  upstream/HMCL/build/libs/HMCL-*.deb
+                  upstream/HMCL/build/libs/HMCL-*.sha256)
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --target "${{ steps.clone.outputs.sha }}" \
+            --title "HMCL $TAG (region check removed)" \
+            --prerelease \
+            --notes "Unofficial build of [HMCL-dev/HMCL](https://github.com/HMCL-dev/HMCL/commit/${{ steps.clone.outputs.sha }}) with the China-mainland region check removed (RegionUtils.IS_CHINA_MAINLAND_MACHINE forced to true). Licensed under GPLv3, source available upstream."
