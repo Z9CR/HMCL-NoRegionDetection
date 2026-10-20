@@ -143,7 +143,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub release
-        if: steps.release_check.outputs.exists == 'false' && github.event_name == 'schedule'
+        if: steps.release_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -156,7 +156,6 @@ jobs:
                   upstream/HMCL/build/libs/HMCL-*.deb
                   upstream/HMCL/build/libs/HMCL-*.sha256)
           gh release create "$TAG" "${ASSETS[@]}" \
-            --target "${{ steps.clone.outputs.sha }}" \
             --title "HMCL $TAG (region check removed)" \
             --prerelease \
             --notes "Unofficial build of [HMCL-dev/HMCL](https://github.com/HMCL-dev/HMCL/commit/${{ steps.clone.outputs.sha }}) with the China-mainland region check removed (RegionUtils.IS_CHINA_MAINLAND_MACHINE forced to true). Licensed under GPLv3, source available upstream."
